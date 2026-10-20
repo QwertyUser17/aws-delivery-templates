@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Stand-in for the AWS CLI on the instance: only ecr get-login-password is used there.
+printf '%s\n' "$*" >>"${MOCK_DIR:?}/aws-calls"
+if [[ $1 == ecr && $2 == get-login-password ]]; then
+  echo "mock-ecr-token"
+fi

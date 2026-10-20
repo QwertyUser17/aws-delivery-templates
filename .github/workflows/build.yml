@@ -1,0 +1,94 @@
+# Reusable: builds the image, pushes it to ECR and publishes build.env as an artifact.
+name: build
+
+on:
+  workflow_call:
+    inputs:
+      aws-region:
+        type: string
+        required: true
+      aws-role-arn:
+        description: IAM role with ECR push rights, assumed through OIDC.
+        type: string
+        required: true
+      ecr-repository:
+        description: ECR repository. Defaults to owner/repo of the caller, lower case.
+        type: string
+        default: ""
+      context:
+        type: string
+        default: .
+      dockerfile:
+        type: string
+        default: Dockerfile
+      platforms:
+        description: Comma-separated, e.g. linux/amd64,linux/arm64.
+        type: string
+        default: linux/amd64
+      lifecycle-policy:
+        description: Path of an ECR lifecycle policy JSON in the caller repository. Empty for the default in policies/.
+        type: string
+        default: ""
+      build-env-artifact:
+        type: string
+        default: build-env
+    outputs:
+      image-ref:
+        value: ${{ jobs.build.outputs.image-ref }}
+      image-tag:
+        value: ${{ jobs.build.outputs.image-tag }}
+      image-digest:
+        value: ${{ jobs.build.outputs.image-digest }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image-ref: ${{ steps.build.outputs.image-ref }}
+      image-tag: ${{ steps.build.outputs.image-tag }}
+      image-digest: ${{ steps.build.outputs.image-digest }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: lib
+        uses: QwertyUser17/aws-delivery-templates/actions/scripts@main
+
+      - id: aws
+        uses: QwertyUser17/aws-delivery-templates/actions/aws-login@main
+        with:
+          role-arn: ${{ inputs.aws-role-arn }}
+          region: ${{ inputs.aws-region }}
+          ecr: "true"
+
+      - if: contains(inputs.platforms, ',')
+        uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - id: build
+        env:
+          SCRIPTS: ${{ steps.lib.outputs.dir }}
+          ECR_REGISTRY: ${{ steps.aws.outputs.registry }}
+          ECR_REPOSITORY: ${{ inputs.ecr-repository || github.repository }}
+          BUILD_CONTEXT: ${{ inputs.context }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          PLATFORMS: ${{ inputs.platforms }}
+          LIFECYCLE_POLICY_FILE: ${{ inputs.lifecycle-policy }}
+          # For pull requests the branch is head_ref; ref_name would be "123/merge".
+          REF_NAME: ${{ github.head_ref || github.ref_name }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          GIT_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: bash "$SCRIPTS/build/build.sh"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.build-env-artifact }}
+          path: build.env
+          retention-days: 30

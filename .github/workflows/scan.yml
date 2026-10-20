@@ -1,0 +1,117 @@
+# Reusable: lints the Dockerfile with hadolint and scans the built image with Trivy.
+# Both reports are kept as artifacts, the job logs show the readable version.
+name: scan
+
+on:
+  workflow_call:
+    inputs:
+      aws-region:
+        type: string
+        required: true
+      aws-role-arn:
+        description: IAM role with ECR pull rights, assumed through OIDC.
+        type: string
+        required: true
+      dockerfile:
+        type: string
+        default: Dockerfile
+      hadolint-threshold:
+        description: Lowest hadolint level that fails the job (error, warning, info, style, ignore).
+        type: string
+        default: error
+      fail-on-severity:
+        description: Trivy severities that fail the job, comma-separated.
+        type: string
+        default: CRITICAL
+      report-severity:
+        description: Trivy severities that go into the report.
+        type: string
+        default: MEDIUM,HIGH,CRITICAL
+      ignore-unfixed:
+        description: Leave out vulnerabilities that have no fixed version yet.
+        type: boolean
+        default: true
+      build-env-artifact:
+        type: string
+        default: build-env
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  # renovate: datasource=docker depName=hadolint/hadolint
+  HADOLINT_VERSION: v2.15.1
+  # renovate: datasource=docker depName=aquasec/trivy
+  TRIVY_VERSION: 0.76.0
+
+jobs:
+  hadolint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: hadolint
+        env:
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          THRESHOLD: ${{ inputs.hadolint-threshold }}
+        run: |
+          docker run --rm -i "hadolint/hadolint:$HADOLINT_VERSION" hadolint --format json - <"$DOCKERFILE" >hadolint.json || true
+          docker run --rm -i "hadolint/hadolint:$HADOLINT_VERSION" hadolint --failure-threshold "$THRESHOLD" - <"$DOCKERFILE"
+
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hadolint-report
+          path: hadolint.json
+          if-no-files-found: ignore
+
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - id: image
+        uses: QwertyUser17/aws-delivery-templates/actions/build-env@main
+        with:
+          artifact: ${{ inputs.build-env-artifact }}
+
+      - uses: QwertyUser17/aws-delivery-templates/actions/aws-login@main
+        with:
+          role-arn: ${{ inputs.aws-role-arn }}
+          region: ${{ inputs.aws-region }}
+
+      - name: trivy
+        env:
+          REPORT_SEVERITY: ${{ inputs.report-severity }}
+          FAIL_ON: ${{ inputs.fail-on-severity }}
+          IGNORE_UNFIXED: ${{ inputs.ignore-unfixed }}
+          REGION: ${{ inputs.aws-region }}
+        run: |
+          TRIVY_PASSWORD=$(aws ecr get-login-password --region "$REGION")
+          echo "::add-mask::$TRIVY_PASSWORD"
+          export TRIVY_USERNAME=AWS TRIVY_PASSWORD
+          options=(--quiet --severity "$REPORT_SEVERITY" --format json --output /report/trivy.json)
+          if [ "$IGNORE_UNFIXED" = true ]; then options+=(--ignore-unfixed); fi
+          mkdir -p report
+          docker run --rm -e TRIVY_USERNAME -e TRIVY_PASSWORD -v "$PWD/report:/report" \
+            "aquasec/trivy:$TRIVY_VERSION" image "${options[@]}" "$IMAGE_REF@$IMAGE_DIGEST"
+          docker run --rm -v "$PWD/report:/report" "aquasec/trivy:$TRIVY_VERSION" \
+            convert --format table --output /report/trivy.txt /report/trivy.json
+          cat report/trivy.txt
+
+          # The gate reads the same report, so the log and the decision always agree.
+          failing=$(jq --arg fail "$FAIL_ON" '
+            ($fail | split(",")) as $levels
+            | [.Results[]?.Vulnerabilities[]? | select(.Severity as $s | $levels | index($s))] | length
+          ' report/trivy.json)
+          if [ "$failing" -gt 0 ]; then
+            echo "::error title=Trivy::$failing vulnerabilities of severity $FAIL_ON in $IMAGE_REF"
+            exit 1
+          fi
+          echo "No $FAIL_ON vulnerabilities in $IMAGE_REF"
+
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: trivy-report
+          path: report/
+          if-no-files-found: ignore

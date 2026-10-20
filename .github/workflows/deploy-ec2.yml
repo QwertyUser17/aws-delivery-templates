@@ -1,0 +1,108 @@
+# Reusable: runs the image from build.env on an EC2 instance with ssm-deploy
+# (tools/ssm-deploy). This workflow only passes the inputs; the logic is in the tool.
+# See docs/deploy-ec2.md and tools/ssm-deploy/README.md.
+name: deploy-ec2
+
+on:
+  workflow_call:
+    inputs:
+      aws-region:
+        type: string
+        required: true
+      aws-role-arn:
+        description: IAM role allowed to send SSM commands to the instance, assumed through OIDC.
+        type: string
+        required: true
+      instance-id:
+        type: string
+        required: true
+      container-name:
+        type: string
+        required: true
+      environment:
+        description: GitHub environment of the job, for protection rules and environment secrets.
+        type: string
+        default: ""
+      publish:
+        description: Port options for docker run, e.g. "-p 80:8080".
+        type: string
+        default: ""
+      run-args:
+        description: Other docker run options. No secrets here, use the container-env secret.
+        type: string
+        default: ""
+      health-passes:
+        description: Healthy checks in a row before the deploy counts as done.
+        type: number
+        default: 6
+      health-interval:
+        description: Seconds between health checks.
+        type: number
+        default: 5
+      prune:
+        description: Remove old images of the repository on the instance after a good deploy.
+        type: boolean
+        default: true
+      keep-release:
+        type: number
+        default: 5
+      keep-branch:
+        type: number
+        default: 3
+      log-group:
+        description: CloudWatch log group for the command output. Defaults to /aws-delivery/ec2/<container-name>.
+        type: string
+        default: ""
+      ssm-timeout:
+        description: Seconds to wait for the command on the instance.
+        type: number
+        default: 900
+      build-env-artifact:
+        type: string
+        default: build-env
+    secrets:
+      container-env:
+        description: KEY=value lines, passed to the container as -e options.
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    # One deploy at a time per container; a second one waits instead of racing.
+    concurrency:
+      group: deploy-ec2-${{ inputs.instance-id }}-${{ inputs.container-name }}
+      cancel-in-progress: false
+    steps:
+      - id: lib
+        uses: QwertyUser17/aws-delivery-templates/actions/scripts@main
+
+      - uses: QwertyUser17/aws-delivery-templates/actions/build-env@main
+        with:
+          artifact: ${{ inputs.build-env-artifact }}
+
+      - uses: QwertyUser17/aws-delivery-templates/actions/aws-login@main
+        with:
+          role-arn: ${{ inputs.aws-role-arn }}
+          region: ${{ inputs.aws-region }}
+
+      - name: ssm-deploy
+        env:
+          TOOLS: ${{ steps.lib.outputs.tools }}
+          INSTANCE_ID: ${{ inputs.instance-id }}
+          CONTAINER_NAME: ${{ inputs.container-name }}
+          PUBLISH: ${{ inputs.publish }}
+          RUN_ARGS: ${{ inputs.run-args }}
+          CONTAINER_ENV: ${{ secrets.container-env }}
+          HEALTH_PASSES: ${{ inputs.health-passes }}
+          HEALTH_INTERVAL: ${{ inputs.health-interval }}
+          PRUNE: ${{ inputs.prune }}
+          KEEP_RELEASE: ${{ inputs.keep-release }}
+          KEEP_BRANCH: ${{ inputs.keep-branch }}
+          LOG_GROUP: ${{ inputs.log-group }}
+          SSM_WAIT_TIMEOUT: ${{ inputs.ssm-timeout }}
+        run: bash "$TOOLS/ssm-deploy/deploy.sh"

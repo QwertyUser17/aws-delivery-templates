@@ -1,0 +1,60 @@
+# Example consumer: build, scan and run the image on one EC2 instance.
+# Repository variables: AWS_REGION, AWS_ROLE_ARN, EC2_INSTANCE_ID.
+# Secrets: SLACK_WEBHOOK_URL, and WEB_ENV in the production environment.
+name: deliver
+
+on:
+  push:
+    branches: [main, "feature/**", "release/**", "hotfix/**", "bugfix/**"]
+
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+
+jobs:
+  started:
+    uses: QwertyUser17/aws-delivery-templates/.github/workflows/notify.yml@main
+    with:
+      event: started
+    secrets:
+      slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  build:
+    uses: QwertyUser17/aws-delivery-templates/.github/workflows/build.yml@main
+    with:
+      aws-region: ${{ vars.AWS_REGION }}
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN }}
+      ecr-repository: web
+
+  scan:
+    needs: build
+    uses: QwertyUser17/aws-delivery-templates/.github/workflows/scan.yml@main
+    with:
+      aws-region: ${{ vars.AWS_REGION }}
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN }}
+
+  deploy:
+    needs: [build, scan]
+    if: github.ref == 'refs/heads/main'
+    uses: QwertyUser17/aws-delivery-templates/.github/workflows/deploy-ec2.yml@main
+    with:
+      aws-region: ${{ vars.AWS_REGION }}
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN }}
+      environment: production
+      instance-id: ${{ vars.EC2_INSTANCE_ID }}
+      container-name: web
+      publish: -p 80:8080
+      run-args: --memory 256m -e APP_MODE=production
+    secrets:
+      container-env: ${{ secrets.WEB_ENV }}
+
+  finished:
+    needs: [started, build, scan, deploy]
+    if: always()
+    uses: QwertyUser17/aws-delivery-templates/.github/workflows/notify.yml@main
+    with:
+      event: finished
+      status: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || 'success' }}
+    secrets:
+      slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}

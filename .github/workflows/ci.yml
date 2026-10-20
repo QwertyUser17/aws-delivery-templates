@@ -1,0 +1,85 @@
+# CI of this repository: the scripts, the templates and the examples.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # renovate: datasource=github-releases depName=rhysd/actionlint
+  ACTIONLINT_VERSION: 1.7.12
+  # renovate: datasource=pypi depName=check-jsonschema
+  CHECK_JSONSCHEMA_VERSION: 0.38.2
+  # renovate: datasource=docker depName=hadolint/hadolint
+  HADOLINT_VERSION: v2.15.1
+  # renovate: datasource=github-releases depName=hashicorp/terraform extractVersion=^v(?<version>.+)$
+  TERRAFORM_VERSION: 1.16.6
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: shellcheck
+        run: |
+          find scripts tools -type f \( -name '*.sh' -o -path '*/mocks/*' \) -print0 |
+            xargs -0 shellcheck --external-sources --source-path=SCRIPTDIR
+
+      # The instance side must run on dash. shellcheck checks it as sh above; these
+      # parse it with two POSIX shells, and the bats tests execute it with dash.
+      - name: POSIX parse of the instance script
+        run: |
+          dash -n tools/ssm-deploy/remote.sh
+          bash --posix -n tools/ssm-deploy/remote.sh
+
+  bats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: bats-core/bats-action@4.0.0
+        with:
+          bats-version: 1.14.0
+          support-install: false
+          assert-install: false
+          detik-install: false
+          file-install: false
+      - run: bats --print-output-on-failure tools/ssm-deploy/tests/
+
+  templates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: actionlint
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo "rhysd/actionlint:$ACTIONLINT_VERSION" -color \
+            .github/workflows/*.yml examples/*/.github/workflows/*.yml
+
+      - name: composite actions and GitLab templates against their schemas
+        run: |
+          pipx run "check-jsonschema==$CHECK_JSONSCHEMA_VERSION" --builtin-schema vendor.github-actions actions/*/action.yml
+          pipx run "check-jsonschema==$CHECK_JSONSCHEMA_VERSION" --builtin-schema vendor.gitlab-ci \
+            gitlab/*.yml examples/gitlab-ec2/.gitlab-ci.yml
+
+      - name: hadolint on the example Dockerfile
+        run: docker run --rm -i "hadolint/hadolint:$HADOLINT_VERSION" hadolint --failure-threshold style - <examples/app/Dockerfile
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate

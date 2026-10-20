@@ -1,0 +1,34 @@
+name: Slack message
+description: Posts a pipeline start or finish message to a Slack incoming webhook.
+inputs:
+  webhook-url:
+    description: Slack incoming webhook URL. Pass it from a secret.
+    required: true
+  event:
+    description: started or finished.
+    required: true
+  status:
+    description: For finished, the result of the pipeline (success, failure, cancelled).
+    default: ""
+  title:
+    description: First line of the message. The repository name if empty.
+    default: ""
+  jobs-json:
+    description: JSON array of {"name", "url", "conclusion"} jobs to link in the message.
+    default: "[]"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.webhook-url }}
+        EVENT: ${{ inputs.event }}
+        STATUS: ${{ inputs.status }}
+        TITLE: ${{ inputs.title }}
+        JOBS_JSON: ${{ inputs.jobs-json }}
+        REPOSITORY: ${{ github.repository }}
+        REF: ${{ github.head_ref || github.ref_name }}
+        SHA: ${{ github.sha }}
+        ACTOR: ${{ github.actor }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: bash "$GITHUB_ACTION_PATH/../../scripts/notify/slack.sh"

@@ -1,0 +1,20 @@
+name: aws-delivery-templates scripts
+description: >
+  Returns the paths of scripts/ and tools/ from this repository at the ref the
+  action is called with. The reusable workflows call it at @main, like everything
+  else here.
+outputs:
+  dir:
+    description: Absolute path of the scripts/ directory.
+    value: ${{ steps.locate.outputs.dir }}
+  tools:
+    description: Absolute path of the tools/ directory.
+    value: ${{ steps.locate.outputs.tools }}
+runs:
+  using: composite
+  steps:
+    - id: locate
+      shell: bash
+      run: |
+        echo "dir=$(cd "$GITHUB_ACTION_PATH/../../scripts" && pwd)" >>"$GITHUB_OUTPUT"
+        echo "tools=$(cd "$GITHUB_ACTION_PATH/../../tools" && pwd)" >>"$GITHUB_OUTPUT"

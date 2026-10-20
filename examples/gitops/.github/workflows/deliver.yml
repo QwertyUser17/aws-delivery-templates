@@ -1,0 +1,38 @@
+# Example consumer: deploy to Kubernetes through a GitOps repository. main goes to
+# dev with a commit; another environment is the same job with its own gitops-file.
+# The patch must have an image: of the ECR repository in its pod template.
+# Repository variables: AWS_REGION, AWS_ROLE_ARN. Secret: GITOPS_DEPLOY_KEY.
+name: deliver
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    uses: QwertyUser17/aws-delivery-templates/.github/workflows/build.yml@main
+    with:
+      aws-region: ${{ vars.AWS_REGION }}
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN }}
+      ecr-repository: demo-api
+
+  scan:
+    needs: build
+    uses: QwertyUser17/aws-delivery-templates/.github/workflows/scan.yml@main
+    with:
+      aws-region: ${{ vars.AWS_REGION }}
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN }}
+
+  dev:
+    needs: [build, scan]
+    uses: QwertyUser17/aws-delivery-templates/.github/workflows/render-gitops.yml@main
+    with:
+      gitops-repository: git@github.com:example-org/gitops.git
+      gitops-file: apps/demo-api/overlays/dev/deployment-patch.yaml
+      target-type: kustomize-patch
+    secrets:
+      gitops-deploy-key: ${{ secrets.GITOPS_DEPLOY_KEY }}

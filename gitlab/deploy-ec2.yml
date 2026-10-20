@@ -1,0 +1,59 @@
+# deploy-ec2 for GitLab CI. It runs ssm-deploy (tools/ssm-deploy), downloaded from
+# this repository at DELIVERY_TEMPLATES_REF, the same tool the GitHub workflow runs.
+# The template only passes variables. See docs/gitlab-deploy-ec2.md.
+#
+#   include:
+#     - remote: https://raw.githubusercontent.com/QwertyUser17/aws-delivery-templates/main/gitlab/deploy-ec2.yml
+#
+#   deploy:
+#     extends: .aws-deploy-ec2
+#     needs: [build]                  # publishes build.env as an artifact
+#     variables:
+#       AWS_ROLE_ARN: arn:aws:iam::123456789012:role/delivery-gitlab
+#       AWS_REGION: eu-central-1
+#       INSTANCE_ID: i-0123456789abcdef0
+#       CONTAINER_NAME: web
+#       PUBLISH: "-p 80:8080"
+
+.aws-deploy-ec2:
+  stage: deploy
+  image:
+    name: amazon/aws-cli:2.38.2
+    entrypoint: [""]
+  # GitLab OIDC: the job gets AWS credentials from this token, no keys are stored.
+  id_tokens:
+    AWS_ID_TOKEN:
+      aud: sts.amazonaws.com
+  variables:
+    GIT_STRATEGY: none
+    DELIVERY_TEMPLATES_URL: https://github.com/QwertyUser17/aws-delivery-templates
+    DELIVERY_TEMPLATES_REF: main
+  resource_group: deploy-ec2-$INSTANCE_ID-$CONTAINER_NAME
+  before_script:
+    - |
+      set -eu
+      : "${AWS_ROLE_ARN:?set AWS_ROLE_ARN, the IAM role this job assumes}"
+      : "${AWS_REGION:?set AWS_REGION}"
+      [ -f build.env ] || { echo "build.env is missing: the job in needs must publish it as an artifact"; exit 1; }
+      if command -v dnf >/dev/null 2>&1; then dnf install -y -q jq tar gzip >/dev/null; else yum install -y -q jq tar gzip >/dev/null; fi
+
+      creds=$(aws sts assume-role-with-web-identity \
+        --role-arn "$AWS_ROLE_ARN" \
+        --role-session-name "gitlab-$CI_PROJECT_ID-$CI_JOB_ID" \
+        --web-identity-token "$AWS_ID_TOKEN" \
+        --duration-seconds 3600 \
+        --query Credentials --output json)
+      AWS_ACCESS_KEY_ID=$(printf '%s' "$creds" | jq -r .AccessKeyId)
+      AWS_SECRET_ACCESS_KEY=$(printf '%s' "$creds" | jq -r .SecretAccessKey)
+      AWS_SESSION_TOKEN=$(printf '%s' "$creds" | jq -r .SessionToken)
+      export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+
+      mkdir -p /tmp/delivery
+      curl -fsSL "$DELIVERY_TEMPLATES_URL/archive/$DELIVERY_TEMPLATES_REF.tar.gz" |
+        tar -xz --strip-components=1 -C /tmp/delivery
+  script:
+    - |
+      set -a
+      . ./build.env
+      set +a
+      bash /tmp/delivery/tools/ssm-deploy/deploy.sh

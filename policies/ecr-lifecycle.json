@@ -1,0 +1,59 @@
+{
+  "rules": [
+    {
+      "rulePriority": 1,
+      "description": "Untagged images: layers of overwritten tags and failed pushes",
+      "selection": {
+        "tagStatus": "untagged",
+        "countType": "sinceImagePushed",
+        "countUnit": "days",
+        "countNumber": 1
+      },
+      "action": { "type": "expire" }
+    },
+    {
+      "rulePriority": 2,
+      "description": "Builds from branches outside the tag scheme",
+      "selection": {
+        "tagStatus": "tagged",
+        "tagPatternList": ["*-unknown"],
+        "countType": "sinceImagePushed",
+        "countUnit": "days",
+        "countNumber": 1
+      },
+      "action": { "type": "expire" }
+    },
+    {
+      "rulePriority": 3,
+      "description": "Feature, bugfix and dev builds: the last 10",
+      "selection": {
+        "tagStatus": "tagged",
+        "tagPatternList": ["*-feature", "*-bugfix", "*-dev"],
+        "countType": "imageCountMoreThan",
+        "countNumber": 10
+      },
+      "action": { "type": "expire" }
+    },
+    {
+      "rulePriority": 4,
+      "description": "Release candidates and hotfixes: the last 10",
+      "selection": {
+        "tagStatus": "tagged",
+        "tagPatternList": ["*-rc", "*-hotfix"],
+        "countType": "imageCountMoreThan",
+        "countNumber": 10
+      },
+      "action": { "type": "expire" }
+    },
+    {
+      "rulePriority": 5,
+      "description": "Everything else, release builds included: the last 50",
+      "selection": {
+        "tagStatus": "any",
+        "countType": "imageCountMoreThan",
+        "countNumber": 50
+      },
+      "action": { "type": "expire" }
+    }
+  ]
+}

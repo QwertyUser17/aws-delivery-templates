@@ -1,0 +1,53 @@
+# Example consumer on GitLab: your own build job publishes build.env, the included
+# template deploys it to EC2 with the same scripts the GitHub workflow uses.
+# CI/CD variables: AWS_ROLE_ARN, AWS_REGION, ECR_REGISTRY, EC2_INSTANCE_ID,
+# and WEB_ENV (masked) for the container environment.
+
+include:
+  - remote: https://raw.githubusercontent.com/QwertyUser17/aws-delivery-templates/main/gitlab/deploy-ec2.yml
+
+stages: [build, deploy]
+
+build:
+  stage: build
+  image: docker:28-cli
+  services: [docker:28-dind]
+  id_tokens:
+    AWS_ID_TOKEN:
+      aud: sts.amazonaws.com
+  variables:
+    IMAGE_REPOSITORY: $ECR_REGISTRY/web
+  script:
+    - apk add --no-cache aws-cli
+    - |
+      set -eu
+      # Same OIDC exchange as in the deploy template.
+      creds=$(aws sts assume-role-with-web-identity --role-arn "$AWS_ROLE_ARN" \
+        --role-session-name "gitlab-$CI_PROJECT_ID-$CI_JOB_ID" --web-identity-token "$AWS_ID_TOKEN" \
+        --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)
+      read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN <<EOF
+      $creds
+      EOF
+      export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+      aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+      tag="$CI_PIPELINE_IID"
+      [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ] || tag="$CI_PIPELINE_IID-unknown"
+      docker build --tag "$IMAGE_REPOSITORY:$tag" examples/app
+      docker push "$IMAGE_REPOSITORY:$tag"
+      # build.env as the templates expect it: NAME='value' lines.
+      printf "IMAGE_REF='%s'\n" "$IMAGE_REPOSITORY:$tag" >build.env
+  artifacts:
+    paths: [build.env]
+    expire_in: 1 week
+
+deploy:
+  extends: .aws-deploy-ec2
+  needs: [build]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  environment: production
+  variables:
+    INSTANCE_ID: $EC2_INSTANCE_ID
+    CONTAINER_NAME: web
+    PUBLISH: -p 80:8080
+    CONTAINER_ENV: $WEB_ENV

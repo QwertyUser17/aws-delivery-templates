@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Stand-in for docker in the tests. Records every call in $MOCK_DIR/calls and
+# answers from files in $MOCK_DIR:
+#   containers      one "name image" line per container
+#   states.<name>   inspect answers for the health gate, one per check;
+#                   the last line repeats once the queue runs out
+#   pull_rc run_rc  exit codes of pull and run (0 if missing)
+#   images          output of docker images
+#   in_use          image refs that rmi refuses to remove
+set -u
+dir=${MOCK_DIR:?MOCK_DIR is not set}
+printf '%s\n' "$*" >>"$dir/calls"
+touch "$dir/containers"
+
+names() { cut -d' ' -f1 "$dir/containers"; }
+drop() { grep -v "^$1 " "$dir/containers" >"$dir/containers.tmp" || true; mv "$dir/containers.tmp" "$dir/containers"; }
+
+case $1 in
+  ps)
+    if [[ $* == *'{{.Names}}'* ]]; then names; else cat "$dir/containers"; fi
+    ;;
+  inspect)
+    format=$3
+    name=${*: -1}
+    if [[ $format == *'{{.State.Status}}:'* ]]; then
+      queue="$dir/states.$name"
+      [[ -s $queue ]] || exit 1
+      head -1 "$queue"
+      if [[ $(wc -l <"$queue") -gt 1 ]]; then
+        tail -n +2 "$queue" >"$queue.tmp" && mv "$queue.tmp" "$queue"
+      fi
+    elif [[ $format == *'{{.Config.Image}}'* ]]; then
+      awk -v n="$name" '$1 == n { print $2 }' "$dir/containers"
+    else
+      echo "Status=exited ExitCode=1 OOMKilled=false"
+    fi
+    ;;
+  pull)
+    echo "0123456789ab: Pulling fs layer"
+    echo "0123456789ab: Pull complete"
+    echo "Status: Downloaded newer image for ${*: -1}"
+    exit "$(cat "$dir/pull_rc" 2>/dev/null || echo 0)"
+    ;;
+  run)
+    rc=$(cat "$dir/run_rc" 2>/dev/null || echo 0)
+    [[ $rc -eq 0 ]] || exit "$rc"
+    image=${*: -1}
+    previous=''
+    for arg in "$@"; do
+      [[ $previous != --name ]] || name=$arg
+      previous=$arg
+    done
+    echo "$name $image" >>"$dir/containers"
+    printf '%s\n' "$@" >"$dir/run_args"
+    ;;
+  rename)
+    awk -v o="$2" -v n="$3" '$1 == o { $1 = n } { print }' "$dir/containers" >"$dir/containers.tmp"
+    mv "$dir/containers.tmp" "$dir/containers"
+    ;;
+  rm)
+    for arg in "${@:2}"; do [[ $arg == -* ]] || drop "$arg"; done
+    ;;
+  images)
+    cat "$dir/images" 2>/dev/null
+    ;;
+  rmi)
+    if grep -Fqx -- "$2" "$dir/in_use" 2>/dev/null; then exit 1; fi
+    ;;
+  login)
+    cat >/dev/null
+    echo "WARNING! Your credentials are stored unencrypted in '/root/.docker/config.json'."
+    echo "Login Succeeded"
+    ;;
+esac
+exit 0

@@ -1,0 +1,54 @@
+# Example consumer: build, scan and roll an ECS service, staging on main and
+# production on release branches.
+# Repository variables: AWS_REGION, AWS_ROLE_ARN, ECS_CLUSTER.
+# Secret: SLACK_WEBHOOK_URL.
+name: deliver
+
+on:
+  push:
+    branches: [main, "release/**"]
+
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+
+jobs:
+  build:
+    uses: QwertyUser17/aws-delivery-templates/.github/workflows/build.yml@main
+    with:
+      aws-region: ${{ vars.AWS_REGION }}
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN }}
+      ecr-repository: api
+      platforms: linux/amd64,linux/arm64
+
+  scan:
+    needs: build
+    uses: QwertyUser17/aws-delivery-templates/.github/workflows/scan.yml@main
+    with:
+      aws-region: ${{ vars.AWS_REGION }}
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN }}
+      fail-on-severity: HIGH,CRITICAL
+
+  deploy:
+    needs: [build, scan]
+    uses: QwertyUser17/aws-delivery-templates/.github/workflows/deploy-ecs.yml@main
+    with:
+      aws-region: ${{ vars.AWS_REGION }}
+      aws-role-arn: ${{ vars.AWS_ROLE_ARN }}
+      environment: ${{ github.ref == 'refs/heads/main' && 'staging' || 'production' }}
+      cluster: ${{ vars.ECS_CLUSTER }}
+      service: ${{ github.ref == 'refs/heads/main' && 'api-staging' || 'api' }}
+      container-name: api
+      wait-timeout: 900
+
+  finished:
+    needs: [build, scan, deploy]
+    if: always()
+    uses: QwertyUser17/aws-delivery-templates/.github/workflows/notify.yml@main
+    with:
+      event: finished
+      status: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || 'success' }}
+      title: api ${{ github.ref_name }}
+    secrets:
+      slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}

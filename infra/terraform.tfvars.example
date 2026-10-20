@@ -1,0 +1,2 @@
+# cp terraform.tfvars.example terraform.tfvars
+github_repositories = ["your-org/web"]

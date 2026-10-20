@@ -1,0 +1,48 @@
+# Reusable: Slack message at the start or at the end of a pipeline. The finish
+# message links the jobs that failed or were cancelled. See docs/notify.md.
+name: notify
+
+on:
+  workflow_call:
+    inputs:
+      event:
+        description: started or finished.
+        type: string
+        required: true
+      status:
+        description: For finished, success, failure or cancelled. Compute it from needs.*.result in the caller.
+        type: string
+        default: ""
+      title:
+        description: First line of the message. The repository name if empty.
+        type: string
+        default: ""
+    secrets:
+      slack-webhook-url:
+        required: true
+
+permissions:
+  actions: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - id: jobs
+        if: inputs.event == 'finished'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          URL: ${{ github.api_url }}/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs?per_page=100
+        run: |
+          jobs=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' "$URL" |
+            jq -c '[.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")
+                    | {name, url: .html_url, conclusion}]') || jobs='[]'
+          echo "json=$jobs" >>"$GITHUB_OUTPUT"
+
+      - uses: QwertyUser17/aws-delivery-templates/actions/slack@main
+        with:
+          webhook-url: ${{ secrets.slack-webhook-url }}
+          event: ${{ inputs.event }}
+          status: ${{ inputs.status }}
+          title: ${{ inputs.title }}
+          jobs-json: ${{ steps.jobs.outputs.json || '[]' }}

@@ -1,0 +1,48 @@
+name: Read build.env
+description: >
+  Downloads the build.env artifact of the build stage and exports every value to
+  the environment of the following steps and as outputs.
+inputs:
+  artifact:
+    description: Name of the artifact that holds build.env.
+    default: build-env
+outputs:
+  image-ref:
+    description: Image with tag, registry/repository:tag.
+    value: ${{ steps.read.outputs.image-ref }}
+  image-repository:
+    description: Image without tag, registry/repository.
+    value: ${{ steps.read.outputs.image-repository }}
+  image-tag:
+    description: Image tag.
+    value: ${{ steps.read.outputs.image-tag }}
+  image-digest:
+    description: Image digest, sha256:...
+    value: ${{ steps.read.outputs.image-digest }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.artifact }}
+        path: ${{ runner.temp }}/build-env
+
+    - id: read
+      shell: bash
+      env:
+        BUILD_ENV: ${{ runner.temp }}/build-env/build.env
+      run: |
+        set -a
+        . "$BUILD_ENV"
+        set +a
+        # Delimited form: a value may contain anything, newlines included.
+        while IFS= read -r name; do
+          printf '%s<<__BUILD_ENV__\n%s\n__BUILD_ENV__\n' "$name" "${!name}" >>"$GITHUB_ENV"
+        done < <(sed -n 's/^\([A-Z_][A-Z0-9_]*\)=.*/\1/p' "$BUILD_ENV")
+        {
+          echo "image-ref=$IMAGE_REF"
+          echo "image-repository=$IMAGE_REPOSITORY"
+          echo "image-tag=$IMAGE_TAG"
+          echo "image-digest=$IMAGE_DIGEST"
+        } >>"$GITHUB_OUTPUT"
+        echo "Image from the build stage: $IMAGE_REF@$IMAGE_DIGEST"

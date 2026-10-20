@@ -1,0 +1,78 @@
+# Reusable: rolls an ECS service to the image from build.env and rolls it back if
+# the service doesn't become stable in time. See docs/deploy-ecs.md.
+name: deploy-ecs
+
+on:
+  workflow_call:
+    inputs:
+      aws-region:
+        type: string
+        required: true
+      aws-role-arn:
+        description: IAM role with ECS deploy rights, assumed through OIDC.
+        type: string
+        required: true
+      cluster:
+        type: string
+        required: true
+      service:
+        type: string
+        required: true
+      container-name:
+        description: Container in the task definition that gets the new image.
+        type: string
+        required: true
+      environment:
+        type: string
+        default: ""
+      wait-timeout:
+        description: Seconds to wait for the new revision to become stable.
+        type: number
+        default: 1200
+      rollback-timeout:
+        description: Seconds to wait for the previous revision after a rollback.
+        type: number
+        default: 600
+      build-env-artifact:
+        type: string
+        default: build-env
+    outputs:
+      rolled-back:
+        value: ${{ jobs.deploy.outputs.rolled-back }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 45
+    concurrency:
+      group: deploy-ecs-${{ inputs.cluster }}-${{ inputs.service }}
+      cancel-in-progress: false
+    outputs:
+      rolled-back: ${{ steps.deploy.outputs.rolled-back }}
+    steps:
+      - id: lib
+        uses: QwertyUser17/aws-delivery-templates/actions/scripts@main
+
+      - uses: QwertyUser17/aws-delivery-templates/actions/build-env@main
+        with:
+          artifact: ${{ inputs.build-env-artifact }}
+
+      - uses: QwertyUser17/aws-delivery-templates/actions/aws-login@main
+        with:
+          role-arn: ${{ inputs.aws-role-arn }}
+          region: ${{ inputs.aws-region }}
+
+      - id: deploy
+        env:
+          SCRIPTS: ${{ steps.lib.outputs.dir }}
+          ECS_CLUSTER: ${{ inputs.cluster }}
+          ECS_SERVICE: ${{ inputs.service }}
+          CONTAINER_NAME: ${{ inputs.container-name }}
+          WAIT_TIMEOUT: ${{ inputs.wait-timeout }}
+          ROLLBACK_TIMEOUT: ${{ inputs.rollback-timeout }}
+        run: bash "$SCRIPTS/ecs/deploy.sh"

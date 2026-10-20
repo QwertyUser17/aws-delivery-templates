@@ -1,0 +1,28 @@
+name: AWS login
+description: Assumes an IAM role through GitHub OIDC and, if asked, logs docker in to ECR.
+inputs:
+  role-arn:
+    description: IAM role to assume. Its trust policy must allow this repository.
+    required: true
+  region:
+    description: AWS region.
+    required: true
+  ecr:
+    description: Also log docker in to the ECR registry of this account and region.
+    default: "false"
+outputs:
+  registry:
+    description: ECR registry host, set when ecr is true.
+    value: ${{ steps.ecr.outputs.registry }}
+runs:
+  using: composite
+  steps:
+    - uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: ${{ inputs.role-arn }}
+        aws-region: ${{ inputs.region }}
+        role-session-name: gha-${{ github.run_id }}-${{ github.run_attempt }}
+
+    - id: ecr
+      if: inputs.ecr == 'true'
+      uses: aws-actions/amazon-ecr-login@v2
