@@ -4,9 +4,9 @@
 
 ## What it is and who it is for
 
-CI templates that build a Docker image, push it to ECR, scan it and deploy it to AWS. Most of it is GitHub Actions reusable workflows. There is also one GitLab CI template, for the EC2 deploy.
+This is my approach to delivering containers to AWS. It grew out of real projects and has run in production; this repository builds it again from scratch, in a better form - new code, new structure, and things the earlier version didn't have: rollback by rename, OIDC instead of keys, tests.
 
-It's a reference implementation of a setup I've run in production. This repo is a personal project written from scratch: same ideas, none of the original code.
+CI templates that build a Docker image, push it to ECR, scan it and deploy it to AWS. Most of it is GitHub Actions reusable workflows. There is also one GitLab CI template, for the EC2 deploy.
 
 It's for a small team with a few services on AWS, where every repository needs almost the same pipeline. Only the last step depends on where the service runs: one EC2 instance, ECS, or Kubernetes with Argo CD. The interesting part is "Decisions and why", most of all the EC2 deploy.
 
