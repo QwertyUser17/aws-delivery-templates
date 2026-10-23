@@ -186,6 +186,19 @@ main() {
     fail "pull of $IMAGE_REF failed. The running container was not touched."
   fi
 
+  # One deploy of a container at a time on this instance. CI queues its own deploys,
+  # but not two CI systems or a manual run: a parallel deploy would take this one's
+  # -previous for a leftover and roll back over its container.
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"/tmp/ssm-deploy-$CONTAINER_NAME.lock"
+    if ! flock -n 9; then
+      echo "Another deploy of $CONTAINER_NAME is running on this instance, waiting up to 300s"
+      flock -w 300 9 || fail "another deploy of $CONTAINER_NAME still runs after 300s. The running container was not touched."
+    fi
+  else
+    echo "WARNING: flock is not installed, a parallel deploy of $CONTAINER_NAME is not held back"
+  fi
+
   # The old container is stopped and renamed, not removed: if the new one fails the
   # health gate, it comes back exactly as it was, with its own image, env and ports.
   had_previous=false

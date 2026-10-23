@@ -38,6 +38,14 @@ health() {
   [ "$(cat "$MOCK_DIR/containers")" = 'app reg.example/app:41' ]
 }
 
+@test "a second deploy at the same time waits, then gives up without touching anything" {
+  echo 1 >"$MOCK_DIR/flock_rc"
+  deploy
+  [ "$status" -eq 1 ]
+  [[ $output == *"Deploy failed: another deploy of app still runs after 300s"* ]]
+  [ "$(cat "$MOCK_DIR/containers")" = 'app reg.example/app:41' ]
+}
+
 @test "an unhealthy container is replaced by the old one again, and the job says why" {
   health 'running:unhealthy:T2' 'running:healthy:T1'
   deploy

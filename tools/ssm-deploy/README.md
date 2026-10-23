@@ -28,10 +28,11 @@ In CI, `deploy.sh`:
 On the instance, `remote.sh`:
 
 1. Logs in to ECR with the instance role and pulls the image. If the pull fails, it stops there, and the running container is not touched.
-2. Stops the running container and renames it to `<name>-previous`. If there is no running container but `<name>-previous` is left from a rollback that failed, that one is the rollback target.
-3. Starts the new one and checks it several times in a row: healthy if the image has a HEALTHCHECK, running if it doesn't. If `StartedAt` changes between checks, the container restarted, and the check fails.
-4. If the check passes, removes `<name>-previous` and old images. If not, prints the container logs, `docker inspect` and the events, removes the new container and starts `<name>-previous` under its old name.
-5. A failed deploy ends with one line: what runs now and why the new version failed, for example `Deploy failed: web:42 rolled back to web:41: it exited with code 1`.
+2. Takes a lock with `flock`, so two deploys of one container don't run at the same time. A second one waits up to 5 minutes, then fails without touching anything.
+3. Stops the running container and renames it to `<name>-previous`. If there is no running container but `<name>-previous` is left from a rollback that failed, that one is the rollback target.
+4. Starts the new one and checks it several times in a row: healthy if the image has a HEALTHCHECK, running if it doesn't. If `StartedAt` changes between checks, the container restarted, and the check fails.
+5. If the check passes, removes `<name>-previous` and old images. If not, prints the container logs, `docker inspect` and the events, removes the new container and starts `<name>-previous` under its old name.
+6. A failed deploy ends with one line: what runs now and why the new version failed, for example `Deploy failed: web:42 rolled back to web:41: it exited with code 1`.
 
 Containers are found by the exact name. An earlier version used `docker ps --filter name=api`, but this filter is a regular expression. So a deploy of `api` would also stop and remove `api-worker`.
 
