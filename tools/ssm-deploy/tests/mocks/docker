@@ -29,6 +29,8 @@ case $1 in
       if [[ $(wc -l <"$queue") -gt 1 ]]; then
         tail -n +2 "$queue" >"$queue.tmp" && mv "$queue.tmp" "$queue"
       fi
+    elif [[ $format == '{{.State.ExitCode}}' ]]; then
+      echo 1
     elif [[ $format == *'{{.Config.Image}}'* ]]; then
       awk -v n="$name" '$1 == n { print $2 }' "$dir/containers"
     else

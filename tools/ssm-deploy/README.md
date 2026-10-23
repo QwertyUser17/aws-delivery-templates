@@ -23,7 +23,7 @@ In CI, `deploy.sh`:
 
 1. Checks the inputs. A `$VAR` or `$(...)` in `PUBLISH` or `RUN_ARGS` stops the deploy, because CI was supposed to put a value there.
 2. Writes the values as single-quoted variables and adds `remote.sh` after them as it is. `RUN_ARGS` is split into words like `xargs` does, and every word is quoted, so nothing in it runs as shell code.
-3. Turns the script into the JSON for `AWS-RunShellScript` with `jq`, sends it, waits and prints the output from CloudWatch Logs.
+3. Turns the script into the JSON for `AWS-RunShellScript` with `jq`, sends it, waits and prints the output from CloudWatch Logs. If the deploy failed, the last line of the job is the instance's "Deploy failed:" line, with the cause.
 
 On the instance, `remote.sh`:
 
@@ -31,6 +31,7 @@ On the instance, `remote.sh`:
 2. Stops the running container and renames it to `<name>-previous`. If there is no running container but `<name>-previous` is left from a rollback that failed, that one is the rollback target.
 3. Starts the new one and checks it several times in a row: healthy if the image has a HEALTHCHECK, running if it doesn't. If `StartedAt` changes between checks, the container restarted, and the check fails.
 4. If the check passes, removes `<name>-previous` and old images. If not, prints the container logs, `docker inspect` and the events, removes the new container and starts `<name>-previous` under its old name.
+5. A failed deploy ends with one line: what runs now and why the new version failed, for example `Deploy failed: web:42 rolled back to web:41: it exited with code 1`.
 
 Containers are found by the exact name. An earlier version used `docker ps --filter name=api`, but this filter is a regular expression. So a deploy of `api` would also stop and remove `api-worker`.
 

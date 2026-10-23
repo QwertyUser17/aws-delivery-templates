@@ -34,24 +34,24 @@ health() {
   echo 1 >"$MOCK_DIR/pull_rc"
   deploy
   [ "$status" -eq 1 ]
-  [[ $output == *"The running container was not touched"* ]]
+  [[ $output == *"Deploy failed: pull of reg.example/app:42 failed. The running container was not touched."* ]]
   [ "$(cat "$MOCK_DIR/containers")" = 'app reg.example/app:41' ]
 }
 
-@test "an unhealthy container is replaced by the old one again" {
+@test "an unhealthy container is replaced by the old one again, and the job says why" {
   health 'running:unhealthy:T2' 'running:healthy:T1'
   deploy
   [ "$status" -eq 1 ]
-  [[ $output == *"Rolled back"* ]]
+  [[ $output == *"Deploy failed: reg.example/app:42 rolled back to reg.example/app:41: its healthcheck reports unhealthy"* ]]
   [ "$(cat "$MOCK_DIR/containers")" = 'app reg.example/app:41' ]
 }
 
 @test "a -previous container left by a failed rollback is the rollback target" {
   echo 'app-previous reg.example/app:41' >"$MOCK_DIR/containers"
-  health 'running:unhealthy:T2' 'running:healthy:T1'
+  health 'exited:none:T2' 'running:healthy:T1'
   deploy
   [ "$status" -eq 1 ]
-  [[ $output == *"Rolled back"* ]]
+  [[ $output == *"rolled back to reg.example/app:41: it exited with code 1"* ]]
   [ "$(cat "$MOCK_DIR/containers")" = 'app reg.example/app:41' ]
 }
 
@@ -59,7 +59,7 @@ health() {
   health 'running:none:T2' 'running:none:T3' 'running:none:T1'
   deploy
   [ "$status" -eq 1 ]
-  [[ $output == *"restarted between checks"* ]]
+  [[ $output == *"rolled back to reg.example/app:41: it keeps crashing, docker restarted it between checks"* ]]
 }
 
 @test "shell code in run-args doesn't run on the instance" {

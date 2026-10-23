@@ -220,8 +220,16 @@ main() {
   note "SSM command $command_id, output goes to $LOG_GROUP"
 
   status=$(wait_for_command "$command_id")
-  print_output "$command_id"
-  [[ $status == Success ]] || die "deploy failed on $INSTANCE_ID (SSM status: $status)"
+  output=$(mktemp)
+  print_output "$command_id" | tee "$output"
+  if [[ $status != Success ]]; then
+    # remote.sh ends a failed deploy with one "Deploy failed:" line that names the
+    # cause. Repeat it where the job log ends, so it is the first thing you read.
+    verdict=$(grep '^Deploy failed: ' "$output" | tail -n 1 || true)
+    rm -f "$output"
+    die "${verdict:-deploy failed on $INSTANCE_ID (SSM status: $status)}"
+  fi
+  rm -f "$output"
   note "Deployed $IMAGE_REF as $CONTAINER_NAME on $INSTANCE_ID"
 }
 

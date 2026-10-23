@@ -14,6 +14,13 @@ section() {
   printf '\n==> %s\n' "$1"
 }
 
+# fail TEXT: ends a failed deploy with one line that says what happened. deploy.sh
+# repeats it as the last line of the job log.
+fail() {
+  printf '\nDeploy failed: %s\n' "$1"
+  exit 1
+}
+
 # container_exists NAME: exact name match. docker's name filter is a substring regex.
 container_exists() {
   dk ps -a --format '{{.Names}}' | grep -Fqx -- "$1"
@@ -76,9 +83,10 @@ dump_diagnostics() {
 # healthcheck reports healthy, or it is just running when the image has no
 # healthcheck. A changed StartedAt means docker restarted it between checks,
 # which fails the gate even if it looks fine at the moment of the check.
+# On failure gate_reason says why, in words for the last line of the job.
 health_gate() {
   _name=$1 _need=$2 _interval=$3 _max=$4
-  _passes=0 _checks=0 _started='' _reason=''
+  _passes=0 _checks=0 _started='' gate_reason=''
   while [ "$_checks" -lt "$_max" ]; do
     _checks=$((_checks + 1))
     _state=$(dk inspect --format '{{.State.Status}}:{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}:{{.State.StartedAt}}' "$_name" 2>/dev/null) || _state='missing:none:'
@@ -88,7 +96,7 @@ health_gate() {
     _now_started=${_rest#*:}
 
     if [ -n "$_started" ] && [ "$_now_started" != "$_started" ]; then
-      _reason="restarted between checks (StartedAt $_started -> $_now_started)"
+      gate_reason="it keeps crashing, docker restarted it between checks (StartedAt $_started -> $_now_started)"
       break
     fi
     _started=$_now_started
@@ -105,15 +113,28 @@ health_gate() {
         _passes=0
         echo "check $_checks: running, healthcheck still starting"
         ;;
+      running:unhealthy)
+        gate_reason='its healthcheck reports unhealthy'
+        break
+        ;;
+      exited:*)
+        gate_reason="it exited with code $(dk inspect --format '{{.State.ExitCode}}' "$_name" 2>/dev/null)"
+        break
+        ;;
+      restarting:*)
+        gate_reason="it keeps crashing (last exit code $(dk inspect --format '{{.State.ExitCode}}' "$_name" 2>/dev/null)), docker restarts it"
+        break
+        ;;
       *)
-        _reason="status $_status, health $_health"
+        gate_reason="status $_status, health $_health"
         break
         ;;
     esac
     sleep "$_interval"
   done
 
-  echo "Health gate failed for $_name: ${_reason:-not stable after $_max checks}"
+  gate_reason=${gate_reason:-"it was not stable after $_max checks"}
+  echo "Health gate failed for $_name: $gate_reason"
   dump_diagnostics "$_name"
   return 1
 }
@@ -157,14 +178,12 @@ main() {
 
   section "Log in to $REGISTRY"
   if ! registry_login "$REGISTRY" "$AWS_REGION"; then
-    echo "Login failed. The running container was not touched."
-    exit 1
+    fail "login to $REGISTRY failed. The running container was not touched."
   fi
 
   section "Pull $IMAGE_REF"
   if ! pull_image "$IMAGE_REF"; then
-    echo "Pull failed. The running container was not touched."
-    exit 1
+    fail "pull of $IMAGE_REF failed. The running container was not touched."
   fi
 
   # The old container is stopped and renamed, not removed: if the new one fails the
@@ -178,8 +197,7 @@ main() {
     dk stop "$CONTAINER_NAME" >/dev/null
     if ! dk rename "$CONTAINER_NAME" "$previous"; then
       dk start "$CONTAINER_NAME" >/dev/null
-      echo "Could not rename $CONTAINER_NAME, started it again. Nothing was deployed."
-      exit 1
+      fail "could not rename $CONTAINER_NAME, started it again. Nothing was deployed."
     fi
     had_previous=true
   elif container_exists "$previous"; then
@@ -192,15 +210,16 @@ main() {
   section "Start $CONTAINER_NAME from $IMAGE_REF"
   # deploy.sh sends both as single-quoted words, so eval only takes the quotes off.
   eval "set -- $PUBLISH $RUN_ARGS"
-  if dk run --detach \
+  if ! dk run --detach \
     --name "$CONTAINER_NAME" \
     --restart unless-stopped \
     --log-driver json-file \
     --log-opt "max-size=$LOG_MAX_SIZE" \
     --log-opt "max-file=$LOG_MAX_FILES" \
     "$@" \
-    "$IMAGE_REF" >/dev/null &&
-    health_gate "$CONTAINER_NAME" "$HEALTH_PASSES" "$HEALTH_INTERVAL" "$HEALTH_MAX_CHECKS"; then
+    "$IMAGE_REF" >/dev/null; then
+    gate_reason='docker run failed, its error is printed above'
+  elif health_gate "$CONTAINER_NAME" "$HEALTH_PASSES" "$HEALTH_INTERVAL" "$HEALTH_MAX_CHECKS"; then
     section "$CONTAINER_NAME is healthy on $IMAGE_REF"
     if [ "$had_previous" = true ]; then
       dk rm "$previous" >/dev/null || echo "Could not remove $previous, remove it by hand."
@@ -211,24 +230,21 @@ main() {
     fi
     exit 0
   fi
+  reason=$gate_reason
 
   section "Roll back"
   dk rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   if [ "$had_previous" != true ]; then
-    echo "There was no previous container, nothing to roll back to."
-    exit 1
+    fail "$IMAGE_REF did not start: $reason. There was no previous container to roll back to."
   fi
   if ! dk rename "$previous" "$CONTAINER_NAME" || ! dk start "$CONTAINER_NAME" >/dev/null; then
-    echo "Could not bring back the previous container. Check the instance: docker ps -a"
-    exit 1
+    fail "$IMAGE_REF did not start: $reason. The rollback failed too, check the instance: docker ps -a"
   fi
   rollback_image=$(dk inspect --format '{{.Config.Image}}' "$CONTAINER_NAME")
   if health_gate "$CONTAINER_NAME" "$HEALTH_PASSES" "$HEALTH_INTERVAL" "$HEALTH_MAX_CHECKS"; then
-    echo "Rolled back: $CONTAINER_NAME runs $rollback_image again. The deploy of $IMAGE_REF failed."
-  else
-    echo "Rolled back to $rollback_image, but it is not healthy either. Check the instance."
+    fail "$IMAGE_REF rolled back to $rollback_image: $reason"
   fi
-  exit 1
+  fail "$IMAGE_REF rolled back to $rollback_image, but that fails too: $gate_reason. Check the instance."
 }
 
 if [ "${SSM_DEPLOY_LIB:-}" != 1 ]; then
