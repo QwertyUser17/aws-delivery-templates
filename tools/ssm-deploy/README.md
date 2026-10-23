@@ -28,7 +28,7 @@ In CI, `deploy.sh`:
 On the instance, `remote.sh`:
 
 1. Logs in to ECR with the instance role and pulls the image. If the pull fails, it stops there, and the running container is not touched.
-2. Stops the running container and renames it to `<name>-previous`.
+2. Stops the running container and renames it to `<name>-previous`. If there is no running container but `<name>-previous` is left from a rollback that failed, that one is the rollback target.
 3. Starts the new one and checks it several times in a row: healthy if the image has a HEALTHCHECK, running if it doesn't. If `StartedAt` changes between checks, the container restarted, and the check fails.
 4. If the check passes, removes `<name>-previous` and old images. If not, prints the container logs, `docker inspect` and the events, removes the new container and starts `<name>-previous` under its old name.
 

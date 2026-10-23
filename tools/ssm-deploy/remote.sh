@@ -182,6 +182,11 @@ main() {
       exit 1
     fi
     had_previous=true
+  elif container_exists "$previous"; then
+    # Left by a deploy whose rollback failed. It is still the last known version, so
+    # a failure goes back to it, and a successful deploy removes it.
+    echo "$CONTAINER_NAME is missing; $previous from an earlier deploy stays as the rollback target"
+    had_previous=true
   fi
 
   section "Start $CONTAINER_NAME from $IMAGE_REF"

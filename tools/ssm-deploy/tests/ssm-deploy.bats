@@ -46,6 +46,15 @@ health() {
   [ "$(cat "$MOCK_DIR/containers")" = 'app reg.example/app:41' ]
 }
 
+@test "a -previous container left by a failed rollback is the rollback target" {
+  echo 'app-previous reg.example/app:41' >"$MOCK_DIR/containers"
+  health 'running:unhealthy:T2' 'running:healthy:T1'
+  deploy
+  [ "$status" -eq 1 ]
+  [[ $output == *"Rolled back"* ]]
+  [ "$(cat "$MOCK_DIR/containers")" = 'app reg.example/app:41' ]
+}
+
 @test "a restart between checks counts as a failure" {
   health 'running:none:T2' 'running:none:T3' 'running:none:T1'
   deploy
